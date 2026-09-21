@@ -119,6 +119,15 @@ class Dendron:
         """Readily searches and returns tool by name using the fast lookup cache."""
         return self.find_by_name(tool_name)
 
+    @property
+    def nodes(self) -> List[DendronNode]:
+        """Returns all nodes registered in the tree."""
+        return list(self._registry_by_id.values())
+
+    def __len__(self) -> int:
+        """Returns the total number of nodes in the tree."""
+        return len(self._registry_by_id)
+
     def get_frequently_accessed_tools(self, limit: int = 5) -> List[DendronNode]:
         """
         Returns the most frequently accessed tools (MFU) sorted by access_count
@@ -201,17 +210,19 @@ class Dendron:
         self,
         available_inputs: List[str],
         detail_level: int = 1,
-        require_all: bool = True
+        require_all: bool = True,
+        level: Optional[int] = None
     ) -> List[Any]:
         """
         Returns tools whose required parameters match the information the LLM currently possesses.
         Allows the LLM to identify immediate next steps or bypass intermediate exploratory steps.
         
         :param available_inputs: List of parameter/input names the LLM currently has in hand.
-        :param detail_level: 1 (compact), 2 (parameter summary), or 3 (full MCP schema).
+        :param detail_level: 1 (compact), 2 (parameter summary), or 3 (full MCP schema). (Alias: level)
         :param require_all: If True, all required parameters of a tool must be in available_inputs.
                             If False, any overlap satisfies the filter.
         """
+        eff_level = level if level is not None else detail_level
         known_set = set(available_inputs)
         matching_nodes: List[DendronNode] = []
         for node in self._registry_by_id.values():
@@ -224,18 +235,20 @@ class Dendron:
                 if all_params.intersection(known_set) or len(req_params) == 0:
                     matching_nodes.append(node)
 
-        return [node.to_view(level=detail_level) for node in matching_nodes]
+        return [node.to_view(level=eff_level) for node in matching_nodes]
 
     def get_reachable_tools(
         self,
         current_node_id: str,
         max_hops: int = 2,
-        detail_level: int = 1
+        detail_level: int = 1,
+        level: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """
         Returns all tools reachable from current_node_id within max_hops steps,
         showing step distance, path breadcrumbs, and branch conditions.
         """
+        eff_level = level if level is not None else detail_level
         start_node = self.find_by_id(current_node_id) or self.find_by_name(current_node_id)
         if not start_node:
             raise ValueError(f"Node '{current_node_id}' not found in tree '{self.name}'.")
@@ -249,7 +262,7 @@ class Dendron:
             if 1 <= hops <= max_hops:
                 cond_desc = node.transition_condition.description if node.transition_condition else None
                 reachable.append({
-                    "node": node.to_view(level=detail_level),
+                    "node": node.to_view(level=eff_level),
                     "name": node.tool.name,
                     "hops": hops,
                     "path": path,
@@ -271,12 +284,14 @@ class Dendron:
         required_inputs: Optional[List[str]] = None,
         tags: Optional[List[str]] = None,
         detail_level: int = 1,
-        top_k: int = 5
+        top_k: int = 5,
+        level: Optional[int] = None
     ) -> List[Any]:
         """
         Multi-faceted fast search combining natural language query, required inputs, and tags.
-        Returns results formatted at the requested detail_level to conserve tokens.
+        Returns results formatted at the requested detail_level to conserve tokens. (Alias: level)
         """
+        eff_level = level if level is not None else detail_level
         if query:
             rag_results = self._retriever.retrieve(query=query, top_k=top_k * 3)
             candidates = [r.node for r in rag_results]
@@ -291,7 +306,7 @@ class Dendron:
             tag_set = set(t.lower() for t in tags)
             candidates = [n for n in candidates if any(t.lower() in tag_set for t in n.tool.tags)]
 
-        return [n.to_view(level=detail_level) for n in candidates[:top_k]]
+        return [n.to_view(level=eff_level) for n in candidates[:top_k]]
 
     def get_node_addition_guidelines(self) -> str:
         """
