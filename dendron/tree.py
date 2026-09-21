@@ -435,19 +435,33 @@ class Dendron:
         if not current_node:
             return None
 
+        # Filter out children with high negative feedback (suppression threshold = 3 dismissals)
+        viable_children = [c for c in current_node.children if c.negative_feedback_count < 3]
+
         # First pass: evaluate children with specific conditions
-        for child in current_node.children:
+        for child in viable_children:
             if child.has_specific_condition() and child.can_transition(previous_output):
                 child.record_access()
                 return child
 
         # Second pass: evaluate unconditional or default children
-        for child in current_node.children:
+        for child in viable_children:
             if not child.has_specific_condition() and child.can_transition(previous_output):
                 child.record_access()
                 return child
 
         return None
+
+    def record_negative_experience(self, tool_name_or_id: str, reason: str = "") -> None:
+        """
+        Records negative user feedback or rejection for a tool, suppressing it
+        from automatic next-tool suggestions if repeatedly dismissed.
+        """
+        node = self.find_by_id(tool_name_or_id) or self.find_by_name(tool_name_or_id)
+        if node:
+            node.record_negative_feedback()
+            if reason:
+                node.experience_notes.append(f"Negative feedback: {reason}")
 
     # MARK: - Tree Search: BFS & DFS
 

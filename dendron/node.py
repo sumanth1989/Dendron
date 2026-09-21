@@ -48,8 +48,13 @@ class DendronNode:
         self.last_accessed_at: Optional[float] = None
         self.success_count: int = 0
         self.failure_count: int = 0
+        self.negative_feedback_count: int = 0
         self.execution_history: List[ToolResult] = []
         self.experience_notes: List[str] = []
+
+    def record_negative_feedback(self) -> None:
+        """Records user dismissal or negative feedback for this tool."""
+        self.negative_feedback_count += 1
 
     # MARK: - Tree Hierarchy
 

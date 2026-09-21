@@ -46,10 +46,26 @@ class ToolDefinition:
     output_schema: Optional[Dict[str, Any]] = None
     tags: List[str] = field(default_factory=list)
     version: str = "1.0.0"
+    is_destructive: bool = False
+    security_level: str = "safe"  # "safe", "guarded", "destructive"
+    requires_confirmation: bool = False
 
     def __post_init__(self) -> None:
         if self.input_schema is None:
             self.input_schema = self._generate_mcp_input_schema()
+
+    def validate_arguments(self, args: Dict[str, Any]) -> Tuple[bool, List[str]]:
+        """
+        Validates argument values for unresolved template placeholders
+        (e.g., '[Insert Date]', '[TODO]', '<TODO>', '{{...}}').
+        Returns (is_valid, list_of_placeholders).
+        """
+        placeholders: List[str] = []
+        for val in args.values():
+            val_str = str(val)
+            if any(p in val_str for p in ["[Insert ", "[TODO]", "<TODO>", "{{"]):
+                placeholders.append(val_str)
+        return (len(placeholders) == 0, placeholders)
 
     def _generate_mcp_input_schema(self) -> Dict[str, Any]:
         """Generates standard MCP inputSchema dictionary."""
@@ -107,6 +123,16 @@ class ToolDefinition:
 
 
 @dataclass
+class CompositeToolDefinition(ToolDefinition):
+    """
+    Represents a compound multi-step action or macro tool composed of multiple sub-tools
+    executed sequentially or atomically. Inspired by SnapTab's compositeAction architecture.
+    """
+    sub_tools: List[ToolDefinition] = field(default_factory=list)
+    execution_mode: str = "sequential"  # "sequential" or "atomic"
+
+
+@dataclass
 class ToolResult:
     """Encapsulates the execution output of a tool call."""
     tool_name: str
@@ -131,6 +157,10 @@ class TransitionCondition:
     description: str
     condition_type: str = "always"  # "always", "output_contains", "key_equals", "custom"
     expression: Optional[Union[str, Callable[[Any], bool]]] = None
+
+    def __post_init__(self) -> None:
+        if self.condition_type == "always" and self.expression is not None:
+            self.condition_type = "output_contains"
 
     def evaluate(self, previous_output: Any) -> bool:
         """Evaluates whether this transition path matches the output."""
