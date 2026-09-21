@@ -13,29 +13,25 @@ An **adaptive, tree-based tool execution and dynamic discovery library** for AI 
 
 ## Why Dendron?
 
-Standard agent architectures dump 20–50 tools into every LLM prompt turn. This wastes context tokens, increases hallucinations, and loses the natural flow of execution.
+Standard agent architectures dump 20–50 tools into every LLM prompt turn. This wastes context tokens, increases hallucinations, and loses the natural flow of execution. For example, an agent shouldn't try to issue a refund or print a return label before it has even looked up the customer's order!
 
 **Dendron** structures tool use as an **adaptive execution tree**:
-- **Context-Efficient**: The agent only sees relevant next-step tools along its current branch.
+- **Context-Efficient**: The agent only sees relevant next-step tools along its current branch (e.g. `track_shipment` or `process_return` only after `lookup_order`).
 - **Dynamic Learning**: Agents discover and attach new execution paths at runtime as they encounter novel tasks.
 - **Deterministic Transitions**: Evaluates tool outputs against rules (`output_contains`, `key_equals`, or custom predicates) to suggest next steps.
 - **RAG Semantic Discovery**: When an agent doesn't know what tool to use, it queries the tree using natural language intent.
 
 ```
                       [ Root Tool Node ]
-                      (get_all_emails)
-                     /                \
-        condition: "respond"       condition: "unread"
-                   /                    \
-     [ DendronNode: respond_to_email ]   [ DendronNode: extract_unread_emails ]
-                                        /                        \
-                           condition: "read"           condition: "vital"
-                                      /                            \
-                        [ DendronNode: read_email ]    [ DendronNode: extract_vital_info ]
-                                      |
-                               (Learned dynamically)
-                                      |
-                        [ DendronNode: archive_email ]
+                   (lookup_order: order_id)
+                   /                      \
+      status: "delivered"            status: "in_transit"
+                 /                          \
+   [ DendronNode: process_return ]     [ DendronNode: track_shipment ]
+          /                                   |
+condition: "defective"                 (Learned dynamically)
+        /                                     |
+[ DendronNode: issue_instant_refund ]  [ DendronNode: send_sms_alert ]
 ```
 
 ---
@@ -54,64 +50,86 @@ pip install -e .
 ```python
 from dendron import Dendron, ToolDefinition, ToolParameter, TransitionCondition
 
-# 1. Define Root Tool (MCP-Compliant)
+# 1. Define Root Tool (Look up customer order)
 root_tool = ToolDefinition(
-    name="get_all_emails",
-    description="Fetches recent emails from the mailbox API.",
+    name="lookup_order",
+    description="Retrieves customer order details and fulfillment status by order ID.",
     parameters={
-        "mailbox": ToolParameter(name="mailbox", type="string", default="INBOX"),
-        "max_count": ToolParameter(name="max_count", type="integer", default=25),
+        "order_id": ToolParameter(name="order_id", type="string", description="Order ID e.g. ORD-12345", required=True),
     },
-    tags=["email", "fetch", "root"]
+    tags=["orders", "lookup", "root"]
 )
 
 # 2. Create the Tree with Discovery Instructions
 tree = Dendron(
-    name="EmailAgentTree",
+    name="OrderSupportTree",
     root_tool=root_tool,
-    discovery_instructions="Start at 'get_all_emails'. Branch to 'extract_unread_emails' or 'respond_to_email'."
+    discovery_instructions="Start at 'lookup_order'. If delivered, branch to 'process_return'. If in transit, branch to 'track_shipment'."
 )
 
 # 3. Attach Execution Branches with Prompt Templates
-unread_node = tree.add_node(
+track_node = tree.add_node(
     parent_id=tree.root.id,
-    tool=ToolDefinition(name="extract_unread_emails", description="Filter unread messages", tags=["filter"]),
-    branch_label="unread_branch"
+    tool=ToolDefinition(name="track_shipment", description="Fetches live courier tracking and ETA.", tags=["shipping", "tracking"]),
+    branch_label="in_transit_branch",
+    condition=TransitionCondition(
+        description="Order status is in_transit",
+        condition_type="output_contains",
+        expression="in_transit"
+    )
 )
 
-respond_node = tree.add_node(
+return_node = tree.add_node(
     parent_id=tree.root.id,
-    tool=ToolDefinition(name="respond_to_email", description="Send an email reply", tags=["reply", "send"]),
-    branch_label="respond_branch",
-    system_prompt_template="You are replying for {user_name}. Tone: {tone}.",
-    prompt_variables={"user_name": "Alice", "tone": "professional"}
+    tool=ToolDefinition(
+        name="process_return",
+        description="Initiates a return for a delivered order.",
+        parameters={
+            "order_id": ToolParameter(name="order_id", type="string", required=True),
+            "reason": ToolParameter(name="reason", type="string", required=True),
+        },
+        tags=["returns", "refunds"]
+    ),
+    branch_label="delivered_branch",
+    condition=TransitionCondition(
+        description="Order status is delivered",
+        condition_type="output_contains",
+        expression="delivered"
+    ),
+    system_prompt_template="You are a customer support agent for {store_name}. Tone: {tone}.",
+    prompt_variables={"store_name": "ShopEase", "tone": "helpful and friendly"}
 )
 
 # 4. Prompt Injection
-print(respond_node.get_system_prompt(tone="concise"))
-# Output: "You are replying for Alice. Tone: concise."
+print(return_node.get_system_prompt(tone="empathetic"))
+# Output: "You are a customer support agent for ShopEase. Tone: empathetic."
 
 # 5. Dynamic Experience Learning
+# Agent learns that when an item arrives defective, it should issue an instant refund
 tree.record_agent_experience(
-    parent_id=unread_node.id,
-    next_tool=ToolDefinition(name="archive_email", description="Archive email"),
-    trigger_condition_description="Email is a newsletter",
+    parent_id=return_node.id,
+    next_tool=ToolDefinition(
+        name="issue_instant_refund",
+        description="Issues an immediate refund without requiring a return shipment.",
+        parameters={"order_id": ToolParameter(name="order_id", type="string", required=True)},
+        tags=["refund", "instant"]
+    ),
+    trigger_condition_description="Item arrived damaged or defective",
     condition_type="output_contains",
-    condition_expression="newsletter",
-    experience_note="Automatically archive newsletters after reading."
+    condition_expression="defective",
+    experience_note="Automatically issue instant refund for defective items under $50."
 )
 
 # 6. Intelligent Next-Tool Suggestion
-next_tool = tree.suggest_next_tool(unread_node.id, previous_output="Received newsletter #42")
-print(next_tool.tool.name)  # Output: "archive_email"
+next_tool = tree.suggest_next_tool(return_node.id, previous_output="Customer report: item arrived defective and broken.")
+print(next_tool.tool.name)  # Output: "issue_instant_refund"
 
 # 7. RAG Semantic Tool Retrieval (Natural Language Intent)
-best_match = tree.retrieve_best_tool("I need to send a quick reply to a client")
-print(best_match.tool.name)  # Output: "respond_to_email"
+best_match = tree.retrieve_best_tool("Where is my package right now?")
+print(best_match.tool.name)  # Output: "track_shipment"
 
-# 8. MCP Export
-from dendron import MCPAdapter
-mcp_tools = MCPAdapter.to_mcp_tools_list(tree)
+# 8. Token-Tiered Views & MCP Export
+print(tree.export_tool_views(level=1))  # Level 1 compact signatures (~15 tokens/tool)
 ```
 
 ---
@@ -168,6 +186,14 @@ mcp_tools = MCPAdapter.to_mcp_tools_list(tree)
 
 ---
 
+## Author
+
+**Sumanth Mallya**
+- GitHub: [@sumanth1989](https://github.com/sumanth1989)
+
+---
+
 ## License
 
 [MIT License](LICENSE)
+

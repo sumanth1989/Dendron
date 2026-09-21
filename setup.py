@@ -3,6 +3,7 @@ from setuptools import setup, find_packages
 setup(
     name="dendron-ai",
     version="0.1.0",
+    author="Sumanth Mallya",
     description="Dendron: An adaptive, tree-based tool execution and dynamic discovery library for AI agents",
     long_description=open("README.md").read() if open("README.md") else "",
     long_description_content_type="text/markdown",
