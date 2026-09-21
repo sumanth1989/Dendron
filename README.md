@@ -124,6 +124,12 @@ mcp_tools = MCPAdapter.to_mcp_tools_list(tree)
 | `tree.add_node(parent_id, tool, ...)` | Attaches a child tool node (`DendronNode`) to a parent. |
 | `tree.record_agent_experience(...)` | Dynamically appends a learned tool path and re-indexes for RAG. |
 | `tree.suggest_next_tool(parent_id, output)` | Evaluates condition rules against output to suggest the next tool. |
+| `tree.export_tool_views(nodes, level)` | **Token Optimization**: Exports tools at Level 1 (~15 tokens), Level 2 (~50 tokens), or Level 3. |
+| `tree.inspect_tool(name_or_id)` | Expands a specific tool to its full Level 3 MCP JSON Schema on demand. |
+| `tree.get_actionable_tools(available_inputs, level)` | **Info-State Matching**: Returns tools runnable with inputs the LLM currently possesses. |
+| `tree.get_reachable_tools(node_id, max_hops, level)` | Returns reachable tools within N hops with step distance and breadcrumbs. |
+| `tree.search(query, required_inputs, tags, level)` | Multi-faceted fast search combining query, inputs, and tags. |
+| `tree.find_by_input_param(param)` / `find_by_tag(tag)` | $O(1)$ inverted index lookups by parameter or tag. |
 | `tree.retrieve_tools(query, top_k)` | **RAG**: Returns top-$k$ relevant tools using semantic/lexical search. |
 | `tree.retrieve_best_tool(query)` | **RAG**: Convenience method returning the single best `DendronNode`. |
 | `tree.set_embedding_function(fn)` | Plugs in optional dense embeddings (OpenAI, HuggingFace, etc.) for hybrid RAG. |
@@ -131,6 +137,9 @@ mcp_tools = MCPAdapter.to_mcp_tools_list(tree)
 | `tree.search_dfs(query, predicate)` | Depth-first traversal along execution paths. |
 | `tree.find_by_name(name)` / `find_by_id(id)` | $O(1)$ direct node lookup. |
 | `tree.get_frequently_accessed_tools(limit)` | Returns Most Frequently Used (MFU) tools for cache-warming. |
+| `tree.get_node_addition_guidelines()` | Structured guidelines for the LLM on when and how to dynamically add nodes. |
+| `tree.save(path)` / `Dendron.load(path)` | Saves and loads the tree to/from a JSON file. |
+| `node.to_view(level)` | Formats node at Level 1 (compact string), Level 2 (param summary), or Level 3 (MCP). |
 | `node.get_system_prompt(**kwargs)` | Renders system prompt template with node and runtime variables. |
 | `node.get_user_prompt(**kwargs)` | Renders user prompt template with node and runtime variables. |
 | `MCPAdapter.to_mcp_tools_list(tree)` | Exports tree to standard Model Context Protocol `tools/list` format. |
@@ -138,17 +147,24 @@ mcp_tools = MCPAdapter.to_mcp_tools_list(tree)
 
 ---
 
-## Testing & Developer Guide
+## Testing & Examples
 
-- **Run Unit Tests** (39 tests, zero external dependencies):
+- **Run Unit Tests** (55 tests, zero external dependencies):
   ```bash
   python3 -m unittest discover tests
   ```
-- **Run Complete Demo**:
+- **Run Standalone Examples**:
   ```bash
+  # 1. Email Management Agent Demo
   python3 dendron/examples/email_agent_example.py
+
+  # 2. DevOps Incident Response & SRE Demo
+  python3 dendron/examples/devops_incident_agent.py
+
+  # 3. Code Intelligence & CI/CD Review Demo
+  python3 dendron/examples/code_intelligence_agent.py
   ```
-- **In-Depth Guide**: See [DEVELOPER_GUIDE.md](file:///Users/sumanthmallya/Desktop/dendron/DEVELOPER_GUIDE.md) for architectural patterns, custom transition conditions, stateful agent designs, and on-device testing with Apple Foundation Models / MLX.
+- **In-Depth Guide**: See [DEVELOPER_GUIDE.md](file:///Users/sumanthmallya/Desktop/dendron/DEVELOPER_GUIDE.md) for architectural patterns, custom transition conditions, stateful agent designs, and progressive token optimization.
 
 ---
 

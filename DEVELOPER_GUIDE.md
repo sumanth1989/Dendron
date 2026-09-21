@@ -360,3 +360,82 @@ mcp_response = MCPAdapter.to_mcp_tools_list(tree)
 #   ]
 # }
 ```
+
+---
+
+## 7. Token Optimization: Progressive Disclosure (Levels 1, 2, 3)
+
+In complex agents with dozens of tools, loading full JSON Schemas wastes thousands of context tokens on every turn. `Dendron` provides **progressive disclosure**:
+
+```python
+# Level 1: Ultra-compact signature (~10-20 tokens/tool)
+level_1 = tree.export_tool_views(level=1)
+# Example: "refund_transaction(transaction_id, amount) - Processes a payment refund. #billing,refund"
+
+# Level 2: Clean parameter dictionary without JSON Schema boilerplate (~50 tokens/tool)
+level_2 = node.to_view(level=2)
+
+# Level 3: Full Model Context Protocol schema for execution (~200+ tokens/tool)
+# Expanded ONLY for the specific chosen tool on demand
+level_3 = tree.inspect_tool("refund_transaction")
+```
+
+The LLM inspects Level 1 summaries to select a tool candidate, and only calls `tree.inspect_tool(name)` to fetch the Level 3 inputSchema right before calling it.
+
+---
+
+## 8. Information-State Matching & Reachability Horizons
+
+### Actionable Tools Matching
+When the LLM possesses specific information (e.g. from user input or prior outputs), it can query which tools are immediately runnable:
+
+```python
+# Returns tools whose required parameters are satisfied by the provided keys
+actionable = tree.get_actionable_tools(
+    available_inputs=["transaction_id", "amount"],
+    detail_level=1
+)
+```
+
+### Reachability Horizons
+Agents can inspect reachable tools within $N$ steps from their current execution position:
+
+```python
+# Returns reachable tools up to 2 hops away with step distance and breadcrumb paths
+reachable = tree.get_reachable_tools(
+    current_node_id=tree.root.id,
+    max_hops=2,
+    detail_level=1
+)
+for r in reachable:
+    print(f"[{r['hops']} hops] {r['name']} via {' -> '.join(r['path'])}")
+```
+
+---
+
+## 9. Dynamic Node Addition Guidelines
+
+Every node in Dendron is a standard `DendronNode`. To instruct the LLM on **when** and **how** to add nodes dynamically:
+
+```python
+guidelines = tree.get_node_addition_guidelines()
+# Inject guidelines into LLM system prompt:
+# 1. New Capability: newly discovered external tool/API
+# 2. Niche / Specialized Call: recurring fixed parameters or edge-case constraints
+# 3. Learned Transition: reliable output-to-next-step sequence
+```
+
+---
+
+## 10. File Persistence (Save & Load)
+
+Dendron trees can be saved to disk and loaded across agent sessions:
+
+```python
+# Save tree to file
+tree.save("agent_playbook.json")
+
+# Load tree in a new session
+loaded_tree = Dendron.load("agent_playbook.json")
+```
+

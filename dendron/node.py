@@ -177,6 +177,93 @@ class DendronNode:
         """Export tool definition in standard MCP tool format."""
         return self.tool.to_mcp_dict()
 
+    # MARK: - Progressive Token-Tiered Views
+
+    def get_required_parameter_names(self) -> List[str]:
+        """Returns the list of parameter names that are required for this tool."""
+        return [p_name for p_name, p in self.tool.parameters.items() if p.required]
+
+    def get_all_parameter_names(self) -> List[str]:
+        """Returns all parameter names for this tool."""
+        return list(self.tool.parameters.keys())
+
+    def to_compact_summary(self) -> str:
+        """
+        Level 1: Ultra-compact tool signature (approx. 10-20 tokens).
+        Format: name(req_param, [opt_param]) - Description
+        """
+        params_str_list = []
+        for p_name, p in self.tool.parameters.items():
+            if p.required:
+                params_str_list.append(p_name)
+            else:
+                params_str_list.append(f"[{p_name}]")
+        params_formatted = ", ".join(params_str_list)
+        tags_str = f" #{','.join(self.tool.tags)}" if self.tool.tags else ""
+        return f"{self.tool.name}({params_formatted}) - {self.tool.description}{tags_str}"
+
+    def to_compact_dict(self) -> Dict[str, Any]:
+        """
+        Level 1 dict: Compact structured representation of tool essentials.
+        """
+        return {
+            "id": self.id,
+            "name": self.tool.name,
+            "description": self.tool.description,
+            "required_inputs": self.get_required_parameter_names(),
+            "optional_inputs": [p_name for p_name, p in self.tool.parameters.items() if not p.required],
+            "tags": self.tool.tags,
+            "branch_label": self.branch_label,
+        }
+
+    def to_parameter_summary(self) -> Dict[str, Any]:
+        """
+        Level 2: Parameter summary with types and constraints, omitting JSON Schema boilerplate (~50 tokens).
+        """
+        params_detail: Dict[str, Any] = {}
+        for p_name, p in self.tool.parameters.items():
+            entry: Dict[str, Any] = {
+                "type": p.type,
+                "required": p.required,
+                "description": p.description,
+            }
+            if p.default is not None:
+                entry["default"] = p.default
+            if p.enum:
+                entry["enum"] = p.enum
+            params_detail[p_name] = entry
+
+        return {
+            "id": self.id,
+            "name": self.tool.name,
+            "description": self.tool.description,
+            "branch_label": self.branch_label,
+            "tags": self.tool.tags,
+            "parameters": params_detail,
+        }
+
+    def to_mcp_dict(self) -> Dict[str, Any]:
+        """
+        Level 3: Full Model Context Protocol (MCP) JSON Schema definition (~200+ tokens).
+        """
+        return self.tool.to_mcp_dict()
+
+    def to_view(self, level: int = 1) -> Any:
+        """
+        Returns the tool view at the requested detail level:
+        - Level 1: Compact signature string (~10-20 tokens)
+        - Level 2: Parameter summary dictionary (~50 tokens)
+        - Level 3: Full MCP JSON Schema dictionary (~200+ tokens)
+        """
+        if level == 1:
+            return self.to_compact_summary()
+        elif level == 2:
+            return self.to_parameter_summary()
+        elif level == 3:
+            return self.to_mcp_dict()
+        else:
+            raise ValueError(f"detail_level must be 1, 2, or 3 (got {level}).")
+
     def to_dict(self, include_children: bool = True) -> Dict[str, Any]:
         """Serializes node to a JSON-compatible dictionary."""
         data: Dict[str, Any] = {

@@ -8,7 +8,8 @@ and fast-path lookup for most frequently accessed tools (MFU).
 from __future__ import annotations
 import json
 from collections import deque
-from typing import Any, Callable, Dict, List, Optional, Set
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 from .models import ToolDefinition, ToolResult, TransitionCondition
 from .node import DendronNode, ToolNode
 from .retriever import RAGToolRetriever, RAGSearchResult
@@ -52,22 +53,50 @@ class Dendron:
         # Fast lookup registry mapping tool_name and node_id to DendronNode
         self._registry_by_id: Dict[str, DendronNode] = {}
         self._registry_by_name: Dict[str, DendronNode] = {}
+        self._registry_by_param: Dict[str, List[DendronNode]] = {}
+        self._registry_by_tag: Dict[str, List[DendronNode]] = {}
         self._register_node(self.root)
 
     # MARK: - Registry & Fast Lookup (O(1))
 
     def _register_node(self, node: DendronNode) -> None:
-        """Registers node in internal fast lookup caches and RAG index."""
+        """Registers node in internal fast lookup caches, inverted indexes, and RAG index."""
         self._registry_by_id[node.id] = node
         self._registry_by_name[node.tool.name] = node
+        
+        # Inverted index for parameters
+        for param_name in node.tool.parameters.keys():
+            if param_name not in self._registry_by_param:
+                self._registry_by_param[param_name] = []
+            if node not in self._registry_by_param[param_name]:
+                self._registry_by_param[param_name].append(node)
+
+        # Inverted index for tags
+        for tag in node.tool.tags:
+            tag_clean = tag.lower()
+            if tag_clean not in self._registry_by_tag:
+                self._registry_by_tag[tag_clean] = []
+            if node not in self._registry_by_tag[tag_clean]:
+                self._registry_by_tag[tag_clean].append(node)
+
         self._retriever.index_node(node)
         for child in node.children:
             self._register_node(child)
 
     def _unregister_node(self, node: DendronNode) -> None:
-        """Removes node and its children from fast lookup caches and RAG index."""
+        """Removes node and its children from fast lookup caches, inverted indexes, and RAG index."""
         self._registry_by_id.pop(node.id, None)
         self._registry_by_name.pop(node.tool.name, None)
+
+        for param_name in node.tool.parameters.keys():
+            if param_name in self._registry_by_param and node in self._registry_by_param[param_name]:
+                self._registry_by_param[param_name].remove(node)
+
+        for tag in node.tool.tags:
+            tag_clean = tag.lower()
+            if tag_clean in self._registry_by_tag and node in self._registry_by_tag[tag_clean]:
+                self._registry_by_tag[tag_clean].remove(node)
+
         self._retriever.remove_node(node.id)
         for child in node.children:
             self._unregister_node(child)
@@ -103,6 +132,210 @@ class Dendron:
             reverse=True
         )
         return sorted_nodes[:limit]
+
+    def find_by_input_param(self, param_name: str) -> List[DendronNode]:
+        """Returns all nodes in the tree that accept the given input parameter."""
+        nodes = self._registry_by_param.get(param_name, [])
+        for n in nodes:
+            n.record_access()
+        return list(nodes)
+
+    def find_by_input_params(self, param_names: List[str], match_all: bool = False) -> List[DendronNode]:
+        """
+        Returns nodes matching input parameter names.
+        :param match_all: If True, nodes must accept all parameter names in param_names.
+                          If False, nodes accepting any of the parameter names are returned.
+        """
+        if not param_names:
+            return []
+        if match_all:
+            result_sets = [set(self._registry_by_param.get(p, [])) for p in param_names]
+            matched = list(set.intersection(*result_sets)) if result_sets else []
+        else:
+            matched_set: Set[DendronNode] = set()
+            for p in param_names:
+                matched_set.update(self._registry_by_param.get(p, []))
+            matched = list(matched_set)
+        for n in matched:
+            n.record_access()
+        return matched
+
+    def find_by_tag(self, tag: str) -> List[DendronNode]:
+        """Returns all nodes in the tree tagged with the given tag."""
+        nodes = self._registry_by_tag.get(tag.lower(), [])
+        for n in nodes:
+            n.record_access()
+        return list(nodes)
+
+    # MARK: - Progressive Token-Tiered Views & Inspection
+
+    def export_tool_views(
+        self,
+        nodes: Optional[List[DendronNode]] = None,
+        level: int = 1
+    ) -> List[Any]:
+        """
+        Exports tool views at the specified detail level to minimize LLM token consumption:
+        - Level 1: Compact signature string (~10-20 tokens/tool)
+        - Level 2: Parameter summary dictionary (~50 tokens/tool)
+        - Level 3: Full Model Context Protocol (MCP) JSON Schema dictionary (~200+ tokens/tool)
+        """
+        target_nodes = nodes if nodes is not None else list(self._registry_by_id.values())
+        return [node.to_view(level=level) for node in target_nodes]
+
+    def inspect_tool(self, name_or_id: str) -> Dict[str, Any]:
+        """
+        Expands a specific tool to its full Level 3 MCP JSON Schema on demand.
+        The LLM can inspect compact views (Level 1) to select a tool,
+        then call `inspect_tool()` to view its complete inputSchema before execution.
+        """
+        node = self.find_by_name(name_or_id) or self.find_by_id(name_or_id)
+        if not node:
+            raise KeyError(f"Tool '{name_or_id}' not found in tree '{self.name}'.")
+        node.record_access()
+        return node.to_mcp_dict()
+
+    # MARK: - Information-State & Reachability Discovery
+
+    def get_actionable_tools(
+        self,
+        available_inputs: List[str],
+        detail_level: int = 1,
+        require_all: bool = True
+    ) -> List[Any]:
+        """
+        Returns tools whose required parameters match the information the LLM currently possesses.
+        Allows the LLM to identify immediate next steps or bypass intermediate exploratory steps.
+        
+        :param available_inputs: List of parameter/input names the LLM currently has in hand.
+        :param detail_level: 1 (compact), 2 (parameter summary), or 3 (full MCP schema).
+        :param require_all: If True, all required parameters of a tool must be in available_inputs.
+                            If False, any overlap satisfies the filter.
+        """
+        known_set = set(available_inputs)
+        matching_nodes: List[DendronNode] = []
+        for node in self._registry_by_id.values():
+            req_params = set(node.get_required_parameter_names())
+            all_params = set(node.get_all_parameter_names())
+            if require_all:
+                if req_params.issubset(known_set):
+                    matching_nodes.append(node)
+            else:
+                if all_params.intersection(known_set) or len(req_params) == 0:
+                    matching_nodes.append(node)
+
+        return [node.to_view(level=detail_level) for node in matching_nodes]
+
+    def get_reachable_tools(
+        self,
+        current_node_id: str,
+        max_hops: int = 2,
+        detail_level: int = 1
+    ) -> List[Dict[str, Any]]:
+        """
+        Returns all tools reachable from current_node_id within max_hops steps,
+        showing step distance, path breadcrumbs, and branch conditions.
+        """
+        start_node = self.find_by_id(current_node_id) or self.find_by_name(current_node_id)
+        if not start_node:
+            raise ValueError(f"Node '{current_node_id}' not found in tree '{self.name}'.")
+
+        reachable: List[Dict[str, Any]] = []
+        queue: deque[Tuple[DendronNode, int, List[str]]] = deque([(start_node, 0, [start_node.tool.name])])
+        visited: Set[str] = {start_node.id}
+
+        while queue:
+            node, hops, path = queue.popleft()
+            if 1 <= hops <= max_hops:
+                cond_desc = node.transition_condition.description if node.transition_condition else None
+                reachable.append({
+                    "node": node.to_view(level=detail_level),
+                    "name": node.tool.name,
+                    "hops": hops,
+                    "path": path,
+                    "branch_label": node.branch_label,
+                    "condition": cond_desc
+                })
+
+            if hops < max_hops:
+                for child in node.children:
+                    if child.id not in visited:
+                        visited.add(child.id)
+                        queue.append((child, hops + 1, path + [child.tool.name]))
+
+        return reachable
+
+    def search(
+        self,
+        query: Optional[str] = None,
+        required_inputs: Optional[List[str]] = None,
+        tags: Optional[List[str]] = None,
+        detail_level: int = 1,
+        top_k: int = 5
+    ) -> List[Any]:
+        """
+        Multi-faceted fast search combining natural language query, required inputs, and tags.
+        Returns results formatted at the requested detail_level to conserve tokens.
+        """
+        if query:
+            rag_results = self._retriever.retrieve(query=query, top_k=top_k * 3)
+            candidates = [r.node for r in rag_results]
+        else:
+            candidates = list(self._registry_by_id.values())
+
+        if required_inputs:
+            known_set = set(required_inputs)
+            candidates = [n for n in candidates if set(n.get_required_parameter_names()).issubset(known_set)]
+
+        if tags:
+            tag_set = set(t.lower() for t in tags)
+            candidates = [n for n in candidates if any(t.lower() in tag_set for t in n.tool.tags)]
+
+        return [n.to_view(level=detail_level) for n in candidates[:top_k]]
+
+    def get_node_addition_guidelines(self) -> str:
+        """
+        Returns structured guidelines for an LLM on when and how to dynamically add
+        nodes to the tree during execution.
+        """
+        return (
+            "### Dendron: Guidelines for Dynamically Adding Nodes\n\n"
+            "Every node in Dendron is a standard `DendronNode`. The LLM can dynamically expand\n"
+            "the tree at runtime using `tree.add_node(...)` or `tree.record_agent_experience(...)`.\n\n"
+            "#### When to Add a Node:\n"
+            "1. **New Capability / Sub-Workflow**:\n"
+            "   When a new external tool, API endpoint, or sub-task is discovered that logically\n"
+            "   belongs under an existing parent step.\n"
+            "2. **Niche / Specialized Presets**:\n"
+            "   When you learn that a recurring niche scenario (e.g. VIP refunds, newsletter archiving,\n"
+            "   Kubernetes OOM errors) requires specific pre-filled parameters, flags, or constraints.\n"
+            "   Spawning a specialized node avoids re-computing arguments and saves context tokens.\n"
+            "3. **Learned Transition Path**:\n"
+            "   When an observed output pattern (e.g. 'error_code: 503') consistently transitions into\n"
+            "   a specific next action (e.g. 'restart_service'), attach it with a `TransitionCondition`\n"
+            "   so future turns immediately recognize the optimal path.\n\n"
+            "#### How to Add a Node:\n"
+            "```python\n"
+            "tree.add_node(\n"
+            "    parent_id=parent_node.id,\n"
+            "    tool=ToolDefinition(\n"
+            "        name='specialized_tool_name',\n"
+            "        description='Specific purpose description',\n"
+            "        parameters={'param': ToolParameter(name='param', type='string')},\n"
+            "        tags=['niche', 'category']\n"
+            "    ),\n"
+            "    branch_label='specialized_branch',\n"
+            "    condition=TransitionCondition(\n"
+            "        description='When output contains target keyword',\n"
+            "        condition_type='output_contains',\n"
+            "        expression='target_keyword'\n"
+            "    ),\n"
+            "    system_prompt_template='You are specialized in {domain}.',\n"
+            "    prompt_variables={'domain': 'Finance'}\n"
+            ")\n"
+            "```\n"
+            "Once added, the node is immediately indexed in $O(1)$ registries, RAG search, and MFU caching.\n"
+        )
 
     # MARK: - Dynamic Tree Growth (Agent Experience)
 
@@ -377,6 +610,8 @@ class Dendron:
         tree.root = DendronNode.from_dict(root_data)
         tree._registry_by_id.clear()
         tree._registry_by_name.clear()
+        tree._registry_by_param.clear()
+        tree._registry_by_tag.clear()
         tree._register_node(tree.root)
         return tree
 
@@ -384,6 +619,20 @@ class Dendron:
     def from_json(cls, json_str: str) -> Dendron:
         """Deserializes a Dendron tree from a JSON string."""
         return cls.from_dict(json.loads(json_str))
+
+    def save(self, filepath: Union[str, Path]) -> None:
+        """Saves the entire Dendron tree structure to a JSON file."""
+        p = Path(filepath)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(self.to_json())
+
+    @classmethod
+    def load(cls, filepath: Union[str, Path]) -> Dendron:
+        """Loads and deserializes a Dendron tree structure from a JSON file."""
+        p = Path(filepath)
+        if not p.exists():
+            raise FileNotFoundError(f"Dendron file not found: {filepath}")
+        return cls.from_json(p.read_text())
 
     def __repr__(self) -> str:
         total_nodes = len(self._registry_by_id)
