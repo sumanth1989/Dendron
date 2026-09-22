@@ -1,0 +1,33 @@
+name: 🚀 Feature Request / Proposal
+description: Suggest an enhancement, new integration, or tool execution capability
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for suggesting an enhancement to Dendron!
+  - type: textarea
+    id: problem
+    attributes:
+      label: Is your feature request related to a specific problem or use case?
+      description: A clear description of what problem you are trying to solve.
+      placeholder: e.g. "When using edge LLMs, I want to..."
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution / Desired Behavior
+      description: Describe what you would like Dendron to do or provide.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternative Solutions Considered
+      description: Any alternative solutions or workarounds you've considered.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Add any other context, diagrams, or code sketches about the feature request here.

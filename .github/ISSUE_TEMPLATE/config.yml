@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 📖 Documentation & Guides
+    url: https://sumanth1989.github.io/Dendron/
+    about: Read the official guides, core concepts, and API reference.
+  - name: 💬 Community Discussions
+    url: https://github.com/sumanth1989/Dendron/discussions
+    about: Ask questions, share architectures, and discuss agent design patterns.

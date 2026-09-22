@@ -4,6 +4,7 @@
 [![License](https://img.shields.io/badge/License-MIT-blue.svg?style=flat)](LICENSE)
 [![Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(Stdlib%20Only)-green.svg?style=flat)](#installation)
 [![MCP](https://img.shields.io/badge/MCP-Compliant-8A2BE2.svg?style=flat)](https://modelcontextprotocol.io)
+[![Issues](https://img.shields.io/github/issues/sumanth1989/Dendron.svg?style=flat)](https://github.com/sumanth1989/Dendron/issues)
 
 An **adaptive, tree-based tool execution and dynamic discovery library** for AI agents.
 
