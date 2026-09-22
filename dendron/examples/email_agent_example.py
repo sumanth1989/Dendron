@@ -160,7 +160,7 @@ def create_email_tool_tree() -> Dendron:
 
 def run_demonstration():
     print("=" * 70)
-    print("🚀 DENDRON: Email Agent Demonstration")
+    print("=== DENDRON: Email Agent Demonstration ===")
     print("=" * 70)
 
     # 1. Initialize tree

@@ -1,0 +1,3 @@
+# GitHub Linguist overrides
+# Treat Swift helper scripts as documentation so repo is calculated as 100% Python
+*.swift linguist-documentation

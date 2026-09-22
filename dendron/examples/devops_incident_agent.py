@@ -128,7 +128,7 @@ def create_devops_incident_tree() -> Dendron:
 
 def run_devops_agent_demo():
     print("=" * 75)
-    print("🛡️  DENDRON: DevOps Incident Response Agent Demonstration")
+    print("=== DENDRON: DevOps Incident Response Agent Demonstration ===")
     print("=" * 75)
 
     # 1. Initialize Tree
@@ -156,7 +156,7 @@ def run_devops_agent_demo():
     actionable = tree.get_actionable_tools(available_inputs=known_info, detail_level=1)
     print("    Actionable tools (can run immediately without missing parameters):")
     for a in actionable:
-        print(f"    ✅ {a}")
+        print(f"    [Actionable] {a}")
 
     # 5. On-Demand Inspection (Level 3)
     # LLM decides to execute 'restart_failing_pod', expanding only that tool's full schema
@@ -206,7 +206,7 @@ def run_devops_agent_demo():
     print(f"    Tools accepting 'db_cluster': {[n.tool.name for n in db_param_nodes]}")
 
     print("\n" + "=" * 75)
-    print("✅ Demonstration Complete!")
+    print("=== Demonstration Complete ===")
     print("=" * 75)
 
 

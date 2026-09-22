@@ -1,4 +1,4 @@
-# Dendron 🌳🧠
+# Dendron
 
 [![Python](https://img.shields.io/badge/Python-3.9+-3776AB.svg?style=flat&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg?style=flat)](LICENSE)
@@ -12,7 +12,7 @@ An **adaptive, tree-based tool execution and dynamic discovery library** for AI 
 
 ---
 
-## Why Dendron? (Explained Simply 🎒🌳)
+## Why Dendron? (Explained Simply)
 
 ### The Giant Backpack Problem
 Imagine you are sitting at your desk, and someone dumps a giant 50-pound backpack containing **50 different tools** in front of you — a hammer, a blender, scuba goggles, a wrench, scissors, and a pencil.

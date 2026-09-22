@@ -127,7 +127,7 @@ def create_code_review_tree() -> Dendron:
 
 def run_code_intelligence_demo():
     print("=" * 75)
-    print("🔍 DENDRON: Code Intelligence & CI/CD Review Agent Demonstration")
+    print("=== DENDRON: Code Intelligence & CI/CD Review Agent Demonstration ===")
     print("=" * 75)
 
     # 1. Initialize Tree
@@ -146,14 +146,14 @@ def run_code_intelligence_demo():
     print(f"\n[3] Finding Actionable Tools given information: {known_keys}")
     actionable = tree.get_actionable_tools(available_inputs=known_keys, detail_level=1)
     for tool_view in actionable:
-        print(f"    ✅ Actionable: {tool_view}")
+        print(f"    [Actionable] {tool_view}")
 
     # 4. Multi-Faceted Fast Search:
     # Query: "security vulnerability" + tag: "security"
     print("\n[4] Multi-Faceted Fast Search (query='cve vulnerability', tag='security'):")
     search_results = tree.search(query="cve vulnerability", tags=["security"], detail_level=1)
     for res in search_results:
-        print(f"    🔎 Match: {res}")
+        print(f"    [Match] {res}")
 
     # 5. Dynamic Node Addition (Specialized Niche Security Advisory)
     sec_node = tree.find_by_name("scan_dependency_vulnerabilities")
@@ -200,7 +200,7 @@ def run_code_intelligence_demo():
             os.remove(temp_path)
 
     print("\n" + "=" * 75)
-    print("✅ Demonstration Complete!")
+    print("=== Demonstration Complete ===")
     print("=" * 75)
 
 
