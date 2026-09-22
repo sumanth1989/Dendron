@@ -7,7 +7,7 @@ for the Model Context Protocol (MCP) tool specification.
 from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 
 @dataclass
@@ -49,6 +49,7 @@ class ToolDefinition:
     is_destructive: bool = False
     security_level: str = "safe"  # "safe", "guarded", "destructive"
     requires_confirmation: bool = False
+    handler: Optional[Callable[..., Any]] = None
 
     def __post_init__(self) -> None:
         if self.input_schema is None:
@@ -66,6 +67,57 @@ class ToolDefinition:
             if any(p in val_str for p in ["[Insert ", "[TODO]", "<TODO>", "{{"]):
                 placeholders.append(val_str)
         return (len(placeholders) == 0, placeholders)
+
+    def execute(self, **kwargs: Any) -> ToolResult:
+        """
+        Executes the tool's bound handler if present.
+        Validates arguments for unfulfilled placeholders before execution.
+        """
+        valid, placeholders = self.validate_arguments(kwargs)
+        if not valid:
+            return ToolResult(
+                tool_name=self.name,
+                input_args=kwargs,
+                status="error",
+                error_message=f"Argument validation failed: unresolved placeholders detected: {placeholders}"
+            )
+
+        if not self.handler:
+            return ToolResult(
+                tool_name=self.name,
+                input_args=kwargs,
+                status="error",
+                error_message=f"No execution handler registered for tool '{self.name}'"
+            )
+
+        try:
+            import inspect
+            try:
+                sig = inspect.signature(self.handler)
+                has_var_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+                if has_var_kwargs:
+                    call_args = kwargs
+                else:
+                    call_args = {k: v for k, v in kwargs.items() if k in sig.parameters}
+                    if not call_args and not sig.parameters:
+                        call_args = kwargs
+            except (ValueError, TypeError):
+                call_args = kwargs
+
+            output = self.handler(**call_args)
+            return ToolResult(
+                tool_name=self.name,
+                input_args=call_args,
+                output_data=output,
+                status="success"
+            )
+        except Exception as e:
+            return ToolResult(
+                tool_name=self.name,
+                input_args=kwargs,
+                status="error",
+                error_message=str(e)
+            )
 
     def _generate_mcp_input_schema(self) -> Dict[str, Any]:
         """Generates standard MCP inputSchema dictionary."""
@@ -120,6 +172,17 @@ class ToolDefinition:
             parameters=parameters,
             input_schema=input_schema
         )
+
+    @classmethod
+    def from_langchain(cls, tool: Any, tags: Optional[List[str]] = None) -> ToolDefinition:
+        """Constructs a ToolDefinition from any LangChain tool."""
+        from .langchain_adapter import LangChainAdapter
+        return LangChainAdapter.from_langchain_tool(tool, tags=tags)
+
+    def to_langchain(self) -> Any:
+        """Converts this ToolDefinition into a LangChain BaseTool / StructuredTool."""
+        from .langchain_adapter import LangChainAdapter
+        return LangChainAdapter.to_langchain_tool(self)
 
 
 @dataclass

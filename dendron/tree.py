@@ -7,12 +7,23 @@ and fast-path lookup for most frequently accessed tools (MFU).
 
 from __future__ import annotations
 import json
+import logging
+import threading
 from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
+from .exceptions import (
+    DendronError,
+    NodeNotFoundError,
+    InvalidTransitionError,
+    ToolValidationError,
+    SecurityClearanceError,
+)
 from .models import ToolDefinition, ToolResult, TransitionCondition
 from .node import DendronNode, ToolNode
 from .retriever import RAGToolRetriever, RAGSearchResult
+
+logger = logging.getLogger("dendron")
 
 
 class Dendron:
@@ -38,6 +49,7 @@ class Dendron:
         self.name: str = name
         self.description: str = description or root_tool.description
         self.discovery_instructions: str = discovery_instructions
+        self._lock = threading.RLock()
 
         self.root: DendronNode = DendronNode(
             tool=root_tool,
@@ -61,59 +73,63 @@ class Dendron:
 
     def _register_node(self, node: DendronNode) -> None:
         """Registers node in internal fast lookup caches, inverted indexes, and RAG index."""
-        self._registry_by_id[node.id] = node
-        self._registry_by_name[node.tool.name] = node
-        
-        # Inverted index for parameters
-        for param_name in node.tool.parameters.keys():
-            if param_name not in self._registry_by_param:
-                self._registry_by_param[param_name] = []
-            if node not in self._registry_by_param[param_name]:
-                self._registry_by_param[param_name].append(node)
+        with self._lock:
+            self._registry_by_id[node.id] = node
+            self._registry_by_name[node.tool.name] = node
+            
+            # Inverted index for parameters
+            for param_name in node.tool.parameters.keys():
+                if param_name not in self._registry_by_param:
+                    self._registry_by_param[param_name] = []
+                if node not in self._registry_by_param[param_name]:
+                    self._registry_by_param[param_name].append(node)
 
-        # Inverted index for tags
-        for tag in node.tool.tags:
-            tag_clean = tag.lower()
-            if tag_clean not in self._registry_by_tag:
-                self._registry_by_tag[tag_clean] = []
-            if node not in self._registry_by_tag[tag_clean]:
-                self._registry_by_tag[tag_clean].append(node)
+            # Inverted index for tags
+            for tag in node.tool.tags:
+                tag_clean = tag.lower()
+                if tag_clean not in self._registry_by_tag:
+                    self._registry_by_tag[tag_clean] = []
+                if node not in self._registry_by_tag[tag_clean]:
+                    self._registry_by_tag[tag_clean].append(node)
 
-        self._retriever.index_node(node)
-        for child in node.children:
-            self._register_node(child)
+            self._retriever.index_node(node)
+            for child in node.children:
+                self._register_node(child)
 
     def _unregister_node(self, node: DendronNode) -> None:
         """Removes node and its children from fast lookup caches, inverted indexes, and RAG index."""
-        self._registry_by_id.pop(node.id, None)
-        self._registry_by_name.pop(node.tool.name, None)
+        with self._lock:
+            self._registry_by_id.pop(node.id, None)
+            self._registry_by_name.pop(node.tool.name, None)
 
-        for param_name in node.tool.parameters.keys():
-            if param_name in self._registry_by_param and node in self._registry_by_param[param_name]:
-                self._registry_by_param[param_name].remove(node)
+            for param_name in node.tool.parameters.keys():
+                if param_name in self._registry_by_param and node in self._registry_by_param[param_name]:
+                    self._registry_by_param[param_name].remove(node)
 
-        for tag in node.tool.tags:
-            tag_clean = tag.lower()
-            if tag_clean in self._registry_by_tag and node in self._registry_by_tag[tag_clean]:
-                self._registry_by_tag[tag_clean].remove(node)
+            for tag in node.tool.tags:
+                tag_clean = tag.lower()
+                if tag_clean in self._registry_by_tag and node in self._registry_by_tag[tag_clean]:
+                    self._registry_by_tag[tag_clean].remove(node)
 
-        self._retriever.remove_node(node.id)
-        for child in node.children:
-            self._unregister_node(child)
+            self._retriever.remove_node(node.id)
+            for child in node.children:
+                self._unregister_node(child)
 
     def find_by_id(self, node_id: str) -> Optional[DendronNode]:
         """O(1) fast lookup by unique node ID."""
-        node = self._registry_by_id.get(node_id)
-        if node:
-            node.record_access()
-        return node
+        with self._lock:
+            node = self._registry_by_id.get(node_id)
+            if node:
+                node.record_access()
+            return node
 
     def find_by_name(self, tool_name: str) -> Optional[DendronNode]:
         """O(1) fast lookup by tool name."""
-        node = self._registry_by_name.get(tool_name)
-        if node:
-            node.record_access()
-        return node
+        with self._lock:
+            node = self._registry_by_name.get(tool_name)
+            if node:
+                node.record_access()
+            return node
 
     def search_fast(self, tool_name: str) -> Optional[DendronNode]:
         """Readily searches and returns tool by name using the fast lookup cache."""
@@ -200,7 +216,7 @@ class Dendron:
         """
         node = self.find_by_name(name_or_id) or self.find_by_id(name_or_id)
         if not node:
-            raise KeyError(f"Tool '{name_or_id}' not found in tree '{self.name}'.")
+            raise NodeNotFoundError(f"Tool '{name_or_id}' not found in tree '{self.name}'.")
         node.record_access()
         return node.to_mcp_dict()
 
@@ -251,7 +267,7 @@ class Dendron:
         eff_level = level if level is not None else detail_level
         start_node = self.find_by_id(current_node_id) or self.find_by_name(current_node_id)
         if not start_node:
-            raise ValueError(f"Node '{current_node_id}' not found in tree '{self.name}'.")
+            raise NodeNotFoundError(f"Node '{current_node_id}' not found in tree '{self.name}'.")
 
         reachable: List[Dict[str, Any]] = []
         queue: deque[Tuple[DendronNode, int, List[str]]] = deque([(start_node, 0, [start_node.tool.name])])
@@ -368,22 +384,23 @@ class Dendron:
         Attaches a new tool node to a designated parent node.
         Used by the agent as it builds out the tree structure.
         """
-        parent = self._registry_by_id.get(parent_id)
-        if not parent:
-            raise ValueError(f"Parent node with ID '{parent_id}' does not exist in tree '{self.name}'.")
+        with self._lock:
+            parent = self._registry_by_id.get(parent_id)
+            if not parent:
+                raise NodeNotFoundError(f"Parent node with ID '{parent_id}' does not exist in tree '{self.name}'.")
 
-        new_node = DendronNode(
-            tool=tool,
-            branch_label=branch_label,
-            transition_condition=condition,
-            system_prompt_template=system_prompt_template,
-            user_prompt_template=user_prompt_template,
-            prompt_variables=prompt_variables or {}
-        )
+            new_node = DendronNode(
+                tool=tool,
+                branch_label=branch_label,
+                transition_condition=condition,
+                system_prompt_template=system_prompt_template,
+                user_prompt_template=user_prompt_template,
+                prompt_variables=prompt_variables or {}
+            )
 
-        parent.add_child(new_node, branch_label=branch_label, condition=condition)
-        self._register_node(new_node)
-        return new_node
+            parent.add_child(new_node, branch_label=branch_label, condition=condition)
+            self._register_node(new_node)
+            return new_node
 
     def record_agent_experience(
         self,
@@ -427,8 +444,8 @@ class Dendron:
 
     def suggest_next_tool(self, current_node_id: str, previous_output: Any) -> Optional[DendronNode]:
         """
-        Evaluates children of the current node against the output of the previous
-        tool call, returning the best matching next tool node to execute.
+        Evaluates children and DAG transitions of the current node against the output
+        of the previous tool call, returning the best matching next tool node to execute.
         Prioritizes specific transition conditions over unconditional fallbacks.
         """
         current_node = self.find_by_id(current_node_id)
@@ -444,11 +461,27 @@ class Dendron:
                 child.record_access()
                 return child
 
-        # Second pass: evaluate unconditional or default children
+        # Second pass: evaluate DAG transitions with specific conditions
+        for target_id, cond in current_node.transitions:
+            if cond.condition_type != "always" and cond.evaluate(previous_output):
+                target_node = self.find_by_id(target_id)
+                if target_node and target_node.negative_feedback_count < 3:
+                    target_node.record_access()
+                    return target_node
+
+        # Third pass: evaluate unconditional or default children
         for child in viable_children:
             if not child.has_specific_condition() and child.can_transition(previous_output):
                 child.record_access()
                 return child
+
+        # Fourth pass: evaluate unconditional DAG transitions
+        for target_id, cond in current_node.transitions:
+            if cond.condition_type == "always" and cond.evaluate(previous_output):
+                target_node = self.find_by_id(target_id)
+                if target_node and target_node.negative_feedback_count < 3:
+                    target_node.record_access()
+                    return target_node
 
         return None
 
@@ -648,6 +681,355 @@ class Dendron:
     def from_json(cls, json_str: str) -> Dendron:
         """Deserializes a Dendron tree from a JSON string."""
         return cls.from_dict(json.loads(json_str))
+
+    # MARK: - Graph & DAG Cross-Branch Transitions
+
+    def add_transition(
+        self,
+        source_id_or_name: str,
+        target_id_or_name: str,
+        condition: Optional[TransitionCondition] = None
+    ) -> None:
+        """
+        Adds a directed transition edge between any two nodes in the tree,
+        enabling Directed Acyclic Graph (DAG) and cross-branch workflow convergence.
+        """
+        source = self.find_by_id(source_id_or_name) or self.find_by_name(source_id_or_name)
+        if not source:
+            raise NodeNotFoundError(f"Source node '{source_id_or_name}' not found in tree '{self.name}'.")
+        target = self.find_by_id(target_id_or_name) or self.find_by_name(target_id_or_name)
+        if not target:
+            raise NodeNotFoundError(f"Target node '{target_id_or_name}' not found in tree '{self.name}'.")
+
+        source.add_transition_to(target.id, condition)
+        logger.info(f"Added transition from '{source.tool.name}' to '{target.tool.name}'")
+
+    # MARK: - Execution Engine
+
+    def execute(
+        self,
+        node_id_or_name: str,
+        **kwargs: Any
+    ) -> Tuple[ToolResult, Optional[DendronNode]]:
+        """
+        Executes a tool on the specified node with the provided arguments,
+        records the execution history, and automatically evaluates and suggests
+        the next tool based on the execution result.
+        Returns a tuple of (ToolResult, Optional[DendronNode]).
+        """
+        node = self.find_by_id(node_id_or_name) or self.find_by_name(node_id_or_name)
+        if not node:
+            raise NodeNotFoundError(f"Node '{node_id_or_name}' not found in tree '{self.name}'.")
+
+        result = node.execute(**kwargs)
+        next_node = self.suggest_next_tool(node.id, result.output_data) if result.is_success else None
+        return result, next_node
+
+    # MARK: - Tree-of-Trees & Pruning
+
+    def mount_subtree(
+        self,
+        parent_id: str,
+        subtree: Dendron,
+        branch_label: Optional[str] = None,
+        condition: Optional[TransitionCondition] = None
+    ) -> DendronNode:
+        """
+        Mounts another Dendron tree as a sub-tree under the designated parent node.
+        Used for Hierarchical Tree-of-Trees architectures where domain-specific trees
+        (e.g., DevOpsTree, EmailTree) are integrated into a master orchestrator tree.
+        """
+        with self._lock:
+            parent = self._registry_by_id.get(parent_id)
+            if not parent:
+                raise NodeNotFoundError(f"Parent node with ID '{parent_id}' does not exist in tree '{self.name}'.")
+
+            sub_root = subtree.root
+            if branch_label:
+                sub_root.branch_label = branch_label
+            if condition:
+                sub_root.transition_condition = condition
+
+            parent.add_child(sub_root, branch_label=branch_label, condition=condition)
+            self._register_node(sub_root)
+            logger.info(f"Mounted subtree '{subtree.name}' under parent node '{parent_id}'")
+            return sub_root
+
+    def prune(
+        self,
+        min_access_count: int = 0,
+        min_success_rate: float = 0.0,
+        max_age_seconds: Optional[float] = None
+    ) -> int:
+        """
+        Prunes learned or stale nodes from the tree that fail to meet usage criteria.
+        Cannot prune the root node.
+        Returns the number of pruned nodes.
+        """
+        import time
+        now = time.time()
+        pruned_count = 0
+
+        with self._lock:
+            candidates = [n for n in list(self._registry_by_id.values()) if n.id != self.root.id]
+            for node in candidates:
+                should_prune = False
+
+                if node.access_count < min_access_count:
+                    should_prune = True
+
+                total_execs = node.success_count + node.failure_count
+                if total_execs > 0 and (node.success_count / total_execs) < min_success_rate:
+                    should_prune = True
+
+                if max_age_seconds is not None and node.last_accessed_at is not None:
+                    if (now - node.last_accessed_at) > max_age_seconds:
+                        should_prune = True
+
+                if should_prune and node.parent:
+                    node.parent.remove_child(node.id)
+                    self._unregister_node(node)
+                    pruned_count += 1
+
+        logger.info(f"Pruned {pruned_count} nodes from tree '{self.name}'")
+        return pruned_count
+
+    # MARK: - Visualization & LLM Formats
+
+    def visualize(self, format: str = "ascii") -> str:
+        """
+        Renders the tree hierarchy.
+        - 'ascii': Printable terminal tree representation.
+        - 'mermaid': Markdown-compatible Mermaid flowchart syntax.
+        """
+        if format == "mermaid":
+            lines = ["graph TD"]
+            visited: Set[str] = set()
+            def _walk_mermaid(node: DendronNode) -> None:
+                if node.id in visited:
+                    return
+                visited.add(node.id)
+                for child in node.children:
+                    label = f"|{child.branch_label}|" if child.branch_label else ""
+                    lines.append(f'    {node.id}["{node.tool.name}"] -->{label} {child.id}["{child.tool.name}"]')
+                    _walk_mermaid(child)
+                for target_id, cond in node.transitions:
+                    target_node = self.find_by_id(target_id)
+                    if target_node:
+                        cond_label = f"|{cond.description}|" if cond.description else ""
+                        lines.append(f'    {node.id}["{node.tool.name}"] -.->{cond_label} {target_id}["{target_node.tool.name}"]')
+            _walk_mermaid(self.root)
+            return "\n".join(lines)
+
+        # ASCII tree walker
+        lines = []
+        def _walk_ascii(node: DendronNode, prefix: str = "", is_last: bool = True) -> None:
+            connector = "└── " if is_last else "├── "
+            branch_info = f" [{node.branch_label}]" if node.branch_label and node.branch_label != "root" else ""
+            lines.append(f"{prefix}{connector}{node.tool.name}{branch_info}")
+            child_prefix = prefix + ("    " if is_last else "│   ")
+            for i, child in enumerate(node.children):
+                _walk_ascii(child, child_prefix, i == len(node.children) - 1)
+        _walk_ascii(self.root)
+        return "\n".join(lines)
+
+    def to_openai_tools(
+        self,
+        nodes: Optional[List[DendronNode]] = None,
+        level: int = 1
+    ) -> List[Dict[str, Any]]:
+        """
+        Formats tree nodes into standard OpenAI Chat Completion tool definitions.
+        """
+        target_nodes = nodes if nodes is not None else list(self._registry_by_id.values())
+        tools = []
+        for n in target_nodes:
+            if level == 1:
+                parameters = {
+                    "type": "object",
+                    "properties": {
+                        p_name: {"type": p.type, "description": p.description}
+                        for p_name, p in n.tool.parameters.items()
+                    },
+                    "required": n.get_required_parameter_names()
+                }
+            else:
+                parameters = n.tool.input_schema or n.tool._generate_mcp_input_schema()
+
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": n.tool.name,
+                    "description": n.tool.description,
+                    "parameters": parameters,
+                }
+            })
+        return tools
+
+    def to_anthropic_tools(
+        self,
+        nodes: Optional[List[DendronNode]] = None,
+        level: int = 1
+    ) -> List[Dict[str, Any]]:
+        """
+        Formats tree nodes into standard Anthropic Claude tool definitions.
+        """
+        target_nodes = nodes if nodes is not None else list(self._registry_by_id.values())
+        tools = []
+        for n in target_nodes:
+            if level == 1:
+                input_schema = {
+                    "type": "object",
+                    "properties": {
+                        p_name: {"type": p.type, "description": p.description}
+                        for p_name, p in n.tool.parameters.items()
+                    },
+                    "required": n.get_required_parameter_names()
+                }
+            else:
+                input_schema = n.tool.input_schema or n.tool._generate_mcp_input_schema()
+
+            tools.append({
+                "name": n.tool.name,
+                "description": n.tool.description,
+                "input_schema": input_schema,
+            })
+        return tools
+
+    def to_gemini_tools(
+        self,
+        nodes: Optional[List[DendronNode]] = None,
+        level: int = 1
+    ) -> List[Dict[str, Any]]:
+        """
+        Formats tree nodes into Google Gemini FunctionDeclaration dictionaries.
+        Gemini requires OpenAPI/JSON Schema types with uppercase notation:
+        STRING, NUMBER, INTEGER, BOOLEAN, ARRAY, OBJECT.
+        """
+        target_nodes = nodes if nodes is not None else list(self._registry_by_id.values())
+        tools: List[Dict[str, Any]] = []
+        type_map = {
+            "string": "STRING",
+            "number": "NUMBER",
+            "integer": "INTEGER",
+            "boolean": "BOOLEAN",
+            "array": "ARRAY",
+            "object": "OBJECT",
+        }
+        for n in target_nodes:
+            properties: Dict[str, Any] = {}
+            for p_name, p in n.tool.parameters.items():
+                p_type = type_map.get(p.type.lower(), "STRING")
+                prop: Dict[str, Any] = {
+                    "type": p_type,
+                    "description": p.description,
+                }
+                if p.enum:
+                    prop["enum"] = p.enum
+                properties[p_name] = prop
+
+            parameters: Dict[str, Any] = {
+                "type": "OBJECT",
+                "properties": properties,
+            }
+            req_params = n.get_required_parameter_names()
+            if req_params:
+                parameters["required"] = req_params
+
+            tools.append({
+                "name": n.tool.name,
+                "description": n.tool.description,
+                "parameters": parameters,
+            })
+        return tools
+
+    def to_langchain_tools(
+        self,
+        nodes: Optional[List[DendronNode]] = None
+    ) -> List[Any]:
+        """
+        Converts tree nodes into LangChain BaseTool / StructuredTool instances.
+        If langchain-core is not installed, returns duck-typed DendronLangChainTool instances.
+        """
+        from .langchain_adapter import LangChainAdapter
+        target_nodes = nodes if nodes is not None else list(self._registry_by_id.values())
+        return LangChainAdapter.to_langchain_tools(target_nodes)
+
+    @classmethod
+    def from_langchain_tools(
+        cls,
+        tools: List[Any],
+        name: str = "LangChainTree",
+        root_tool_name: Optional[str] = None,
+        discovery_instructions: str = ""
+    ) -> Dendron:
+        """
+        Builds an executable Dendron tree directly from a list of LangChain tools.
+        """
+        from .langchain_adapter import LangChainAdapter
+        return LangChainAdapter.from_langchain_tools(
+            tools=tools,
+            name=name,
+            root_tool_name=root_tool_name,
+            discovery_instructions=discovery_instructions
+        )
+
+    def fetch_tools_for_model(
+        self,
+        model_provider: str,
+        nodes: Optional[List[DendronNode]] = None,
+        level: int = 1
+    ) -> Any:
+        """
+        Fetches tools formatted for the specified model provider:
+        - 'gemini' / 'google': Returns Google Gemini FunctionDeclaration list.
+        - 'openai': Returns OpenAI function calling tool list.
+        - 'anthropic' / 'claude': Returns Anthropic tool definitions.
+        - 'mcp': Returns MCP tool specifications.
+        - 'langchain' / 'lc': Returns LangChain BaseTool / StructuredTool list.
+        """
+        provider = model_provider.lower().strip()
+        if provider in ["gemini", "google"]:
+            return self.to_gemini_tools(nodes=nodes, level=level)
+        elif provider in ["openai", "gpt"]:
+            return self.to_openai_tools(nodes=nodes, level=level)
+        elif provider in ["anthropic", "claude"]:
+            return self.to_anthropic_tools(nodes=nodes, level=level)
+        elif provider in ["mcp"]:
+            target_nodes = nodes if nodes is not None else list(self._registry_by_id.values())
+            return [n.to_mcp_format() for n in target_nodes]
+        elif provider in ["langchain", "lc"]:
+            return self.to_langchain_tools(nodes=nodes)
+        else:
+            raise ValueError(f"Unsupported model provider '{model_provider}'. Supported: 'gemini', 'openai', 'anthropic', 'mcp', 'langchain'.")
+
+    def create_action_plan(
+        self,
+        goal: str,
+        start_node_id: Optional[str] = None,
+        available_inputs: Optional[List[str]] = None,
+        max_steps: int = 5
+    ) -> Any:
+        """
+        Formulates an autonomous action plan to achieve `goal` across the tree.
+        """
+        from .planner import AutonomousActionPlanner
+        planner = AutonomousActionPlanner(self)
+        return planner.plan(goal=goal, start_node_id=start_node_id, available_inputs=available_inputs, max_steps=max_steps)
+
+    def plan_and_execute(
+        self,
+        goal: str,
+        input_context: Dict[str, Any],
+        start_node_id: Optional[str] = None,
+        max_steps: int = 5
+    ) -> List[ToolResult]:
+        """
+        Autonomously plans and executes an action sequence for `goal`.
+        """
+        from .planner import AutonomousActionPlanner
+        planner = AutonomousActionPlanner(self)
+        return planner.plan_and_execute(goal=goal, input_context=input_context, start_node_id=start_node_id, max_steps=max_steps)
 
     def save(self, filepath: Union[str, Path]) -> None:
         """Saves the entire Dendron tree structure to a JSON file."""

@@ -13,7 +13,10 @@ import math
 import re
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
+
+if TYPE_CHECKING:
+    from .node import DendronNode
 
 # Common English stopwords to ignore during lexical tokenization
 STOPWORDS = {
@@ -42,7 +45,7 @@ STOPWORDS = {
 @dataclass
 class RAGSearchResult:
     """Represents a retrieved tool match with relevance score and rationale."""
-    node: Any  # DendronNode (avoid circular import)
+    node: DendronNode
     score: float
     document: str
     match_reasons: List[str] = field(default_factory=list)

@@ -1,0 +1,82 @@
+site_name: Dendron
+site_description: An adaptive, tree-based tool execution and dynamic discovery library for AI agents.
+site_author: Sumanth Mallya
+site_url: https://sumanth1989.github.io/Dendron/
+repo_url: https://github.com/sumanth1989/Dendron
+repo_name: sumanth1989/Dendron
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: teal
+      accent: deep purple
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: teal
+      accent: deep purple
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - content.code.annotate
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: google
+            show_root_heading: true
+            show_source: true
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Installation: getting-started/installation.md
+      - 5-Minute Quickstart: getting-started/quickstart.md
+  - Core Concepts:
+      - Trees vs Flat Lists: core-concepts/trees-vs-lists.md
+      - Token-Tiered Views: core-concepts/token-tiered-views.md
+      - Transition Rules & Conditions: core-concepts/transition-rules.md
+      - RAG Tool Retrieval: core-concepts/rag-retrieval.md
+      - Dynamic Experience Learning: core-concepts/dynamic-experience.md
+      - Tree-of-Trees & DAG Workflows: core-concepts/tree-of-trees-and-dag.md
+  - User Guides:
+      - Tool Execution Engine: guides/tool-execution.md
+      - Model Context Protocol (MCP): guides/model-context-protocol.md
+      - LangChain Integration: guides/langchain-integration.md
+      - LLM Integrations: guides/llm-integrations.md
+      - Guarding Destructive Actions: guides/destructive-actions.md
+  - Examples:
+      - Customer Support Agent: examples/customer-support.md
+      - DevOps & SRE Incident: examples/devops-incident.md
+      - Code Intelligence: examples/code-intelligence.md
+  - API Reference:
+      - Dendron (DendronTree): api-reference/dendron.md
+      - DendronNode: api-reference/node.md
+      - Models: api-reference/models.md
+      - Retriever: api-reference/retriever.md
+      - MCP Adapter: api-reference/mcp-adapter.md
+      - LangChain Adapter: api-reference/langchain-adapter.md
+      - Exceptions: api-reference/exceptions.md

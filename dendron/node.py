@@ -8,7 +8,7 @@ dynamic prompt injection variables.
 from __future__ import annotations
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from .models import ToolDefinition, ToolParameter, ToolResult, TransitionCondition, PromptContext
 
 
@@ -35,6 +35,7 @@ class DendronNode:
         self.transition_condition: Optional[TransitionCondition] = transition_condition
         self.parent: Optional[DendronNode] = parent
         self.children: List[DendronNode] = []
+        self.transitions: List[Tuple[str, TransitionCondition]] = []  # Cross-branch / DAG transition links
 
         # Prompt injection context
         self.prompt_context: PromptContext = PromptContext(
@@ -51,6 +52,20 @@ class DendronNode:
         self.negative_feedback_count: int = 0
         self.execution_history: List[ToolResult] = []
         self.experience_notes: List[str] = []
+
+    def add_transition_to(self, target_node_id: str, condition: Optional[TransitionCondition] = None) -> None:
+        """Adds a directed transition edge to another node in the tree (enabling DAG workflows)."""
+        cond = condition or TransitionCondition(description=f"Transition to {target_node_id}", condition_type="always")
+        self.transitions.append((target_node_id, cond))
+
+    def execute(self, **kwargs: Any) -> ToolResult:
+        """
+        Executes the tool associated with this node, records execution history,
+        and returns the ToolResult.
+        """
+        result = self.tool.execute(**kwargs)
+        self.record_execution(result)
+        return result
 
     def record_negative_feedback(self) -> None:
         """Records user dismissal or negative feedback for this tool."""
@@ -182,6 +197,14 @@ class DendronNode:
         """Export tool definition in standard MCP tool format."""
         return self.tool.to_mcp_dict()
 
+    def to_langchain(self) -> Any:
+        """
+        Converts this node into a LangChain BaseTool / StructuredTool.
+        When invoked, executes this node within the Dendron context.
+        """
+        from .langchain_adapter import LangChainAdapter
+        return LangChainAdapter.to_langchain_tool(self)
+
     # MARK: - Progressive Token-Tiered Views
 
     def get_required_parameter_names(self) -> List[str]:
@@ -296,6 +319,23 @@ class DendronNode:
                 )
             }
 
+        if self.transitions:
+            data["transitions"] = [
+                {
+                    "target_node_id": t[0],
+                    "condition": {
+                        "description": t[1].description,
+                        "condition_type": t[1].condition_type,
+                        "expression": (
+                            t[1].expression
+                            if isinstance(t[1].expression, str)
+                            else str(t[1].expression)
+                        )
+                    }
+                }
+                for t in self.transitions
+            ]
+
         if include_children:
             data["children"] = [child.to_dict(include_children=True) for child in self.children]
 
@@ -329,6 +369,15 @@ class DendronNode:
         node.success_count = data.get("success_count", 0)
         node.failure_count = data.get("failure_count", 0)
         node.experience_notes = data.get("experience_notes", [])
+
+        for trans_data in data.get("transitions", []):
+            cond_dict = trans_data.get("condition", {})
+            cond = TransitionCondition(
+                description=cond_dict.get("description", ""),
+                condition_type=cond_dict.get("condition_type", "always"),
+                expression=cond_dict.get("expression")
+            )
+            node.transitions.append((trans_data.get("target_node_id", ""), cond))
 
         for child_data in data.get("children", []):
             child_node = cls.from_dict(child_data)
