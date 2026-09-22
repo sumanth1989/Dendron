@@ -39,6 +39,9 @@ htmlcov/
 
 # Local test scripts
 dendron/examples/apple_llm_test.py
+test.py
+test_*.py
+!tests/test_*.py
 
 # OS metadata
 .DS_Store
