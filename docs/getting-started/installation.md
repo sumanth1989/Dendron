@@ -5,19 +5,52 @@ Dendron has **zero external dependencies** and is built entirely on the Python s
 ## Requirements
 - Python 3.9 or higher
 
-## Installing with pip
+## Installation Options
 
+### 1. From PyPI (Standard)
 ```bash
-# Standard installation
+# Core library
 pip install dendron-ai
 
-# Editable / development installation from source
-git clone https://github.com/sumanth1989/Dendron.git
-cd Dendron
-pip install -e ".[dev,docs]"
+# With optional LangChain support
+pip install "dendron-ai[langchain]"
 ```
 
-## Zero-Dependency Direct Copy
+### 2. Direct from GitHub
+```bash
+pip install git+https://github.com/sumanth1989/Dendron.git
+
+# With LangChain support
+pip install "dendron-ai[langchain] @ git+https://github.com/sumanth1989/Dendron.git"
+```
+
+### 3. From Local Source
+```bash
+# Standard local install
+pip install .
+
+# Editable development install with dev & doc dependencies
+git clone https://github.com/sumanth1989/Dendron.git
+cd Dendron
+pip install -e ".[dev,docs,langchain]"
+```
+
+### 4. From Built Wheel (`.whl`)
+```bash
+python -m build
+pip install dist/dendron_ai-0.1.0-py3-none-any.whl
+```
+
+### 5. Using Poetry
+```bash
+# From PyPI
+poetry add dendron-ai
+
+# From GitHub
+poetry add git+https://github.com/sumanth1989/Dendron.git
+```
+
+## Zero-Dependency Direct Copy (Vendoring)
 Because Dendron relies solely on the Python standard library, you can also copy the `dendron/` directory directly into your project without running any package installers:
 
 ```text

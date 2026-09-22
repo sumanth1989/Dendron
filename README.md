@@ -75,10 +75,62 @@ Instead of dumping a messy pile of 50 tools onto your desk, **Dendron** organize
 
 ## Installation
 
+Dendron supports multiple installation methods depending on your environment and deployment workflow:
+
+### 1. From PyPI (Standard Production)
 ```bash
+# Core library (Zero external dependencies)
+pip install dendron-ai
+
+# With optional LangChain support
+pip install "dendron-ai[langchain]"
+```
+
+### 2. Direct from GitHub (Latest Commits)
+```bash
+pip install git+https://github.com/sumanth1989/Dendron.git
+
+# With LangChain support
+pip install "dendron-ai[langchain] @ git+https://github.com/sumanth1989/Dendron.git"
+```
+
+### 3. From Local Source
+```bash
+# Standard local install
+pip install .
+
+# Or editable install for active development
 pip install -e .
 ```
-*(Or copy the `dendron/` folder directly into your project — zero external dependencies required.)*
+
+### 4. From Built Wheel (`.whl`)
+```bash
+# Build the distribution
+python -m build
+
+# Install from the generated wheel
+pip install dist/dendron_ai-0.1.0-py3-none-any.whl
+```
+
+### 5. Using Poetry
+```bash
+# Add from PyPI
+poetry add dendron-ai
+
+# Or add directly from GitHub
+poetry add git+https://github.com/sumanth1989/Dendron.git
+
+# Or add from local path
+poetry add /path/to/Dendron
+```
+
+### 6. Zero-Dependency Vendoring (No Package Manager Needed)
+Because Dendron's core has **zero external dependencies** (built purely on the Python standard library), you can simply copy the `dendron/` directory directly into your project, AWS Lambda function, Cloud Run container, or embedded agent repository:
+```text
+my_project/
+├── dendron/          <-- Zero external dependencies
+└── agent.py          <-- from dendron import Dendron, ToolDefinition
+```
 
 ---
 
@@ -207,45 +259,6 @@ print(tree.export_tool_views(level=1))  # Level 1 compact signatures (~15 tokens
 
 ---
 
-## LangChain Interoperability
-
-Dendron provides seamless bidirectional interoperability with **LangChain**:
-
-```python
-from langchain_core.tools import tool
-from dendron import Dendron
-
-@tool
-def lookup_customer(customer_id: str) -> dict:
-    """Looks up a customer profile and balance."""
-    return {"customer_id": customer_id, "balance": -50.0}
-
-@tool
-def issue_refund(customer_id: str, amount: float) -> dict:
-    """Issues a refund to customer."""
-    return {"status": "refunded", "amount": amount}
-
-# 1. Ingest LangChain tools directly into a Dendron execution tree
-tree = Dendron.from_langchain_tools(
-    tools=[lookup_customer, issue_refund],
-    name="SupportTree",
-    root_tool_name="lookup_customer"
-)
-
-# 2. Add transition conditions, prompt templates, or DAG routing
-refund_node = tree.find_by_name("issue_refund")
-refund_node.transition_condition = TransitionCondition(
-    description="Refund if customer has negative balance",
-    condition_type="custom",
-    expression=lambda out: isinstance(out, dict) and out.get("balance", 0) < 0
-)
-
-# 3. Export back to LangChain StructuredTool instances for LangChain agents / ChatOpenAI
-langchain_tools = tree.to_langchain_tools()
-```
-
----
-
 ## Testing & Examples
 
 - **Run Unit Tests** (123 tests, zero external dependencies):
@@ -266,7 +279,53 @@ langchain_tools = tree.to_langchain_tools()
   # 4. Code Intelligence & CI/CD Review Demo
   python3 dendron/examples/code_intelligence_agent.py
   ```
-- **In-Depth Guide**: See [DEVELOPER_GUIDE.md](file:///Users/sumanthmallya/Desktop/dendron/DEVELOPER_GUIDE.md) for architectural patterns, custom transition conditions, stateful agent designs, and progressive token optimization.
+- **In-Depth Guide**: See [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for architectural patterns, custom transition conditions, stateful agent designs, and progressive token optimization.
+
+---
+
+## LangChain Integration & Interoperability
+
+Dendron provides seamless bidirectional interoperability with the **LangChain** ecosystem (`BaseTool`, `StructuredTool`, `@tool`, and `AgentExecutor`):
+
+```python
+from langchain_core.tools import tool
+from dendron import Dendron, TransitionCondition
+
+# 1. Define standard LangChain tools
+@tool
+def lookup_customer(customer_id: str) -> dict:
+    """Looks up a customer profile and balance."""
+    return {"customer_id": customer_id, "balance": -50.0}
+
+@tool
+def issue_refund(customer_id: str, amount: float) -> dict:
+    """Issues a refund to customer."""
+    return {"status": "refunded", "amount": amount}
+
+# 2. Ingest LangChain tools directly into a Dendron execution tree
+tree = Dendron.from_langchain_tools(
+    tools=[lookup_customer, issue_refund],
+    name="SupportTree",
+    root_tool_name="lookup_customer"
+)
+
+# 3. Add transition conditions, prompt templates, or DAG routing
+refund_node = tree.find_by_name("issue_refund")
+refund_node.transition_condition = TransitionCondition(
+    description="Refund if customer has negative balance",
+    condition_type="custom",
+    expression=lambda out: isinstance(out, dict) and out.get("balance", 0) < 0
+)
+
+# 4. Export back to LangChain StructuredTool instances for LangChain agents / ChatOpenAI
+langchain_tools = tree.to_langchain_tools()
+
+# Or convert a single node
+lc_tool = tree.root.to_langchain()
+result = lc_tool.invoke({"customer_id": "CUST-100"})
+```
+
+> **Full Runnable Demo**: See [`dendron/examples/langchain_integration_example.py`](dendron/examples/langchain_integration_example.py) for an end-to-end walkthrough featuring conditional routing, token views, and LangChain `.invoke()` execution.
 
 ---
 
